@@ -94,6 +94,7 @@ function buildPreferenceText(sample) {
 
 function renderSample(sample, sampleIndex, sampleTemplate, audioTemplate) {
   const card = sampleTemplate.content.firstElementChild.cloneNode(true);
+  const showAudioScores = sample.dataset !== "cmi-pref-pseudo";
   card.querySelector(".sample-tag").textContent = `sample ${sampleIndex + 1}`;
   card.querySelector(".prompt").textContent = sample.prompt;
 
@@ -132,7 +133,7 @@ function renderSample(sample, sampleIndex, sampleTemplate, audioTemplate) {
   }
 
   if (sample.assets.a) {
-    const audioAScores = sample.scores && "mq_a" in sample.scores
+    const audioAScores = showAudioScores && sample.scores && "mq_a" in sample.scores
       ? `Music Quality: ${sample.scores.mq_a}  |  Instruction Following: ${sample.scores.if_a}`
       : "";
     audioBlocks.append(
@@ -147,7 +148,7 @@ function renderSample(sample, sampleIndex, sampleTemplate, audioTemplate) {
   }
 
   if (sample.assets.b) {
-    const audioBScores = sample.scores && "mq_b" in sample.scores
+    const audioBScores = showAudioScores && sample.scores && "mq_b" in sample.scores
       ? `Music Quality: ${sample.scores.mq_b}  |  Instruction Following: ${sample.scores.if_b}`
       : "";
     audioBlocks.append(
