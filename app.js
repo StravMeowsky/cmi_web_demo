@@ -6,6 +6,14 @@ async function loadSamples() {
   return response.json();
 }
 
+async function loadSchemaMarkdown() {
+  const response = await fetch("schema.md");
+  if (!response.ok) {
+    throw new Error(`Failed to load schema: ${response.status}`);
+  }
+  return response.text();
+}
+
 function resolveAssetPath(src) {
   if (!src) {
     return "";
@@ -33,6 +41,98 @@ function formatPreference(value) {
 
 function formatScore(value) {
   return typeof value === "number" ? value.toFixed(3) : "—";
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (char) => {
+    const entities = {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      "\"": "&quot;",
+      "'": "&#39;",
+    };
+    return entities[char];
+  });
+}
+
+function formatMarkdownCell(value) {
+  return escapeHtml(value)
+    .replace(/&lt;br\s*\/?&gt;/gi, "<br>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>");
+}
+
+function splitMarkdownRow(line) {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function isMarkdownTableLine(line) {
+  return line.trim().startsWith("|");
+}
+
+function isMarkdownSeparator(line) {
+  const cells = splitMarkdownRow(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function extractTableIntro(lines, tableStartIndex) {
+  let end = tableStartIndex - 1;
+  while (end >= 0 && !lines[end].trim()) {
+    end -= 1;
+  }
+
+  if (end < 0 || lines[end].trim().startsWith(">") || isMarkdownTableLine(lines[end])) {
+    return "";
+  }
+
+  let start = end;
+  while (start - 1 >= 0) {
+    const previousLine = lines[start - 1].trim();
+    if (!previousLine || previousLine.startsWith(">") || isMarkdownTableLine(previousLine)) {
+      break;
+    }
+    start -= 1;
+  }
+
+  return lines
+    .slice(start, end + 1)
+    .map((line) => line.trim())
+    .join(" ");
+}
+
+function extractMarkdownTables(markdown) {
+  const lines = markdown.split(/\r?\n/);
+  const tables = [];
+
+  for (let index = 0; index < lines.length - 1; index += 1) {
+    if (
+      !isMarkdownTableLine(lines[index]) ||
+      !isMarkdownTableLine(lines[index + 1]) ||
+      !isMarkdownSeparator(lines[index + 1])
+    ) {
+      continue;
+    }
+
+    const headers = splitMarkdownRow(lines[index]);
+    const intro = extractTableIntro(lines, index);
+    const rows = [];
+    index += 2;
+
+    while (index < lines.length && isMarkdownTableLine(lines[index])) {
+      rows.push(splitMarkdownRow(lines[index]));
+      index += 1;
+    }
+
+    tables.push({ headers, intro, rows });
+    index -= 1;
+  }
+
+  return tables;
 }
 
 function buildAudioBlock(template, label, model, src, scoresText = "") {
@@ -177,14 +277,78 @@ function renderDataset(dataset, datasetTemplate, sampleTemplate, audioTemplate) 
   return section;
 }
 
+function renderSchemaTables(schemaMarkdown, container) {
+  const tables = extractMarkdownTables(schemaMarkdown);
+  const schemaTableMeta = [
+    {
+      title: "CMI-Pref and CMI-Pseudo",
+      description: "Released dataset fields and whether each field is included.",
+    },
+    {
+      title: "CMIBench",
+      description: "Relevant evaluation keys across benchmark subsets.",
+    },
+  ];
+
+  container.innerHTML = "";
+
+  tables.forEach((table, index) => {
+    const card = document.createElement("article");
+    const meta = schemaTableMeta[index] ?? {
+      title: `Schema Table ${index + 1}`,
+      description: "",
+    };
+
+    card.className = "schema-card";
+    card.innerHTML = `
+      <div>
+        <p class="section-kicker">Table ${index + 1}</p>
+        <h3>${escapeHtml(meta.title)}</h3>
+      </div>
+      <p>${formatMarkdownCell(table.intro || meta.description)}</p>
+      <div class="table-wrap">
+        <table class="schema-table">
+          <thead>
+            <tr>
+              ${table.headers.map((header) => `<th>${formatMarkdownCell(header)}</th>`).join("")}
+            </tr>
+          </thead>
+          <tbody>
+            ${table.rows.map((row) => `
+              <tr>
+                ${row.map((cell) => `<td>${formatMarkdownCell(cell)}</td>`).join("")}
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    `;
+    container.append(card);
+  });
+
+  if (!tables.length) {
+    container.innerHTML = `<p class="loading">No markdown tables found in schema.md.</p>`;
+  }
+}
+
 async function main() {
   const container = document.querySelector("#content");
+  const schemaContainer = document.querySelector("#schema-content");
   const datasetTemplate = document.querySelector("#dataset-template");
   const sampleTemplate = document.querySelector("#sample-template");
   const audioTemplate = document.querySelector("#audio-template");
 
+  const [samplesResult, schemaResult] = await Promise.allSettled([
+    loadSamples(),
+    loadSchemaMarkdown(),
+  ]);
+
   try {
-    const payload = await loadSamples();
+    if (samplesResult.status !== "fulfilled") {
+      throw samplesResult.reason;
+    }
+
+    const payload = samplesResult.value;
     container.innerHTML = "";
     payload.datasets.forEach((dataset) => {
       container.append(
@@ -193,6 +357,14 @@ async function main() {
     });
   } catch (error) {
     container.innerHTML = `<p class="loading">${error.message}</p>`;
+  }
+
+  if (schemaContainer) {
+    if (schemaResult.status === "fulfilled") {
+      renderSchemaTables(schemaResult.value, schemaContainer);
+    } else {
+      schemaContainer.innerHTML = `<p class="loading">${schemaResult.reason.message}</p>`;
+    }
   }
 }
 
