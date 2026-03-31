@@ -135,6 +135,80 @@ function extractMarkdownTables(markdown) {
   return tables;
 }
 
+function extractHtmlCellContent(cell) {
+  const clone = cell.cloneNode(true);
+  clone.querySelectorAll("br").forEach((lineBreak) => lineBreak.replaceWith("\n"));
+  clone.querySelectorAll("code").forEach((code) => code.replaceWith(`\`${code.textContent}\``));
+
+  return clone.textContent
+    .split("\n")
+    .map((part) => part.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("<br>");
+}
+
+function extractHtmlTableIntro(table) {
+  let current = table.previousElementSibling;
+
+  while (current) {
+    if (current.matches("table, h1, h2, h3, h4, h5, h6")) {
+      break;
+    }
+
+    const text = current.textContent.replace(/\s+/g, " ").trim();
+    if (text) {
+      return text;
+    }
+
+    current = current.previousElementSibling;
+  }
+
+  return "";
+}
+
+function extractHtmlTables(content) {
+  if (typeof DOMParser === "undefined") {
+    return [];
+  }
+
+  const document = new DOMParser().parseFromString(content, "text/html");
+
+  return Array.from(document.querySelectorAll("table"))
+    .map((table) => {
+      let headers = table.tHead?.rows?.length
+        ? Array.from(table.tHead.rows[0].cells).map(extractHtmlCellContent)
+        : [];
+
+      const candidateRows = table.tBodies.length
+        ? Array.from(table.tBodies).flatMap((tbody) => Array.from(tbody.rows))
+        : Array.from(table.rows).filter((row) => !(table.tHead && table.tHead.contains(row)));
+
+      if (!headers.length && candidateRows.length) {
+        headers = Array.from(candidateRows.shift().cells).map(extractHtmlCellContent);
+      }
+
+      const rows = candidateRows
+        .map((row) => Array.from(row.cells).map(extractHtmlCellContent))
+        .filter((row) => row.length > 0);
+
+      return {
+        headers,
+        intro: extractHtmlTableIntro(table),
+        rows,
+      };
+    })
+    .filter((table) => table.headers.length > 0);
+}
+
+function extractSchemaTables(content) {
+  const markdownTables = extractMarkdownTables(content);
+  if (markdownTables.length) {
+    return markdownTables;
+  }
+
+  return extractHtmlTables(content);
+}
+
 function buildAudioBlock(template, label, model, src, scoresText = "") {
   const fragment = template.content.firstElementChild.cloneNode(true);
   fragment.querySelector("strong").textContent = label;
@@ -278,7 +352,7 @@ function renderDataset(dataset, datasetTemplate, sampleTemplate, audioTemplate) 
 }
 
 function renderSchemaTables(schemaMarkdown, container) {
-  const tables = extractMarkdownTables(schemaMarkdown);
+  const tables = extractSchemaTables(schemaMarkdown);
   const schemaTableMeta = [
     {
       title: "CMI-Pref and CMI-Pseudo",
@@ -327,7 +401,12 @@ function renderSchemaTables(schemaMarkdown, container) {
   });
 
   if (!tables.length) {
-    container.innerHTML = `<p class="loading">No markdown tables found in schema.md.</p>`;
+    const looksLikeHtml = /<!doctype html|<html[\s>]/i.test(schemaMarkdown);
+    container.innerHTML = `<p class="loading">${
+      looksLikeHtml
+        ? "schema.md was served as HTML, but no table elements were found."
+        : "No markdown or HTML tables were found in schema.md."
+    }</p>`;
   }
 }
 
